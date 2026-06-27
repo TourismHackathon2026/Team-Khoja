@@ -1,3 +1,4 @@
+/* eslint-disable no-unused-vars */
 import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
 import { Link } from 'react-router-dom';
 import { useLanguage } from '../../context/LanguageContext';
