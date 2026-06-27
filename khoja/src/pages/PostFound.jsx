@@ -6,10 +6,10 @@ import { useLanguage } from '../context/LanguageContext';
 import { useAuth } from '../context/AuthContext';
 import { useOnlineStatus } from '../lib/useOnlineStatus';
 import { supabase } from '../lib/supabase';
-import { generateClaimCode } from '../lib/generateClaimCode';
 import { saveDraft } from '../lib/offlineQueue';
 import { matchFoundItemToReports } from '../lib/matchItems';
 import { notifyNearbySpotters } from '../lib/notifySpotters';
+import { hashAnswer } from '../lib/verifyOwnership';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
 import LocationPicker from '../components/map/LocationPicker';
@@ -50,6 +50,11 @@ export default function PostFound() {
   
   const [photoFile, setPhotoFile] = useState(null);
   const [photoPreview, setPhotoPreview] = useState(null);
+  const [verificationQuestions, setVerificationQuestions] = useState([
+    { q: '', a: '' },
+    { q: '', a: '' },
+    { q: '', a: '' },
+  ]);
 
   useEffect(() => {
     localStorage.setItem('khoja-post-found-draft', JSON.stringify(formData));
@@ -102,6 +107,12 @@ export default function PostFound() {
         photoUrl = publicUrl;
       }
 
+      const verification_questions = await Promise.all(
+        verificationQuestions
+          .filter(({ q, a }) => q.trim() && a.trim())
+          .map(async ({ q, a }) => ({ q: q.trim(), a_hash: await hashAnswer(a) }))
+      );
+
       const itemData = {
         title: formData.title,
         description: formData.description,
@@ -111,7 +122,8 @@ export default function PostFound() {
         found_lng: formData.location.lng,
         location_name: formData.location.address,
         posted_by: user?.id || null, 
-        claim_code: isOnline ? generateClaimCode() : null, 
+        claim_code: null,
+        verification_questions,
       };
 
       if (!isOnline) {
@@ -125,12 +137,12 @@ export default function PostFound() {
       const { data: insertedItem, error: insertError } = await supabase
         .from('found_items')
         .insert(itemData)
-        .select()
+        .select('id')
         .single();
 
       if (insertError) throw insertError;
 
-      const matches = await matchFoundItemToReports(supabase, insertedItem);
+      const matches = await matchFoundItemToReports(supabase, { ...itemData, id: insertedItem.id });
       if (matches && matches.length > 0) {
         for (const match of matches) {
            await notifyNearbySpotters(supabase, match);
@@ -152,14 +164,14 @@ export default function PostFound() {
       <div className="mb-8">
         <h1 className="text-3xl font-heading font-bold text-text">{t('nav.found')}</h1>
         <div className="flex items-center mt-4">
-          {[1, 2, 3, 4].map((i) => (
+          {[1, 2, 3, 4, 5].map((i) => (
             <div key={i} className="flex items-center">
               <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium ${
                 step >= i ? 'bg-primary text-white' : 'bg-bg text-muted border border-border'
               }`}>
                 {i}
               </div>
-              {i < 4 && (
+              {i < 5 && (
                 <div className={`w-12 h-1 ${step > i ? 'bg-primary' : 'bg-bg'}`} />
               )}
             </div>
@@ -293,10 +305,43 @@ export default function PostFound() {
 
             <div className="flex justify-between pt-4">
               <Button variant="secondary" onClick={handlePrev} disabled={loading}>Back</Button>
-              <Button 
-                variant="primary" 
-                onClick={handleSubmit} 
-                disabled={!formData.phone}
+              <Button variant="primary" onClick={handleNext} disabled={!formData.phone}>Next</Button>
+            </div>
+          </div>
+        )}
+
+        {step === 5 && (
+          <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
+            <h2 className="text-xl font-medium text-text mb-4">Set Verification Questions</h2>
+            <p className="text-sm text-muted">
+              Ask questions only the true owner can answer. Two are required; the third is optional.
+            </p>
+
+            {verificationQuestions.map((question, index) => (
+              <div key={index} className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4 bg-bg rounded-lg border border-border">
+                <Input
+                  label={`Question ${index + 1}${index === 2 ? ' (Optional)' : ''}`}
+                  value={question.q}
+                  onChange={(e) => setVerificationQuestions(verificationQuestions.map((item, i) => i === index ? { ...item, q: e.target.value } : item))}
+                  placeholder="What color is the zipper?"
+                  required={index < 2}
+                />
+                <Input
+                  label="Answer"
+                  value={question.a}
+                  onChange={(e) => setVerificationQuestions(verificationQuestions.map((item, i) => i === index ? { ...item, a: e.target.value } : item))}
+                  placeholder="Blue"
+                  required={index < 2}
+                />
+              </div>
+            ))}
+
+            <div className="flex justify-between pt-4">
+              <Button variant="secondary" onClick={handlePrev} disabled={loading}>Back</Button>
+              <Button
+                variant="primary"
+                onClick={handleSubmit}
+                disabled={verificationQuestions.slice(0, 2).some(({ q, a }) => !q.trim() || !a.trim())}
                 isLoading={loading}
               >
                 {t('form.submit')}

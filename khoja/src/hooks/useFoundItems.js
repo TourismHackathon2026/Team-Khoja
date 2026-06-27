@@ -11,7 +11,7 @@ export function useFoundItems(options = {}) {
     try {
       let query = supabase
         .from('found_items')
-        .select(`*, profiles!posted_by (full_name, phone)`)
+        .select(`id,title,description,category,photo_url,found_lat,found_lng,location_name,posted_by,claim_code,status,matched_report_id,created_at,profiles:posted_by(full_name, phone)`)
         .order('created_at', { ascending: false });
 
       if (options.status) {

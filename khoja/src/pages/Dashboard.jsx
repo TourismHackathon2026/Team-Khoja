@@ -34,18 +34,22 @@ export default function Dashboard() {
           { data: lost },
           { data: hand }
         ] = await Promise.all([
-          supabase.from('found_items').select('*').eq('posted_by', user.id).order('created_at', { ascending: false }),
+          supabase.from('found_items').select('id,title,description,category,photo_url,found_lat,found_lng,location_name,posted_by,claim_code,status,matched_report_id,created_at').eq('posted_by', user.id).order('created_at', { ascending: false }),
           supabase.from('loss_reports').select('*').eq('reported_by', user.id).order('created_at', { ascending: false }),
-          supabase.from('handovers').select(`
-            *,
-            claimed_by_profile:profiles!handovers_claimed_by_fkey(full_name),
-            handed_over_by_profile:profiles!handovers_handed_over_by_fkey(full_name)
-          `).or(`claimed_by.eq.${user.id},handed_over_by.eq.${user.id}`).order('created_at', { ascending: false })
+          supabase.from('handovers').select('*').or(`claimed_by.eq.${user.id},handed_over_by.eq.${user.id}`).order('created_at', { ascending: false })
         ]);
+
+        const enriched = await Promise.all((hand || []).map(async (h) => {
+          const [{ data: cp }, { data: hp }] = await Promise.all([
+            supabase.from('profiles').select('full_name').eq('id', h.claimed_by).single(),
+            supabase.from('profiles').select('full_name').eq('id', h.handed_over_by).single(),
+          ]);
+          return { ...h, claimed_by_profile: cp, handed_over_by_profile: hp };
+        }));
 
         setFoundItems(found || []);
         setLostReports(lost || []);
-        setHandovers(hand || []);
+        setHandovers(enriched);
         
         const localDrafts = await getDrafts();
         setDrafts(localDrafts);

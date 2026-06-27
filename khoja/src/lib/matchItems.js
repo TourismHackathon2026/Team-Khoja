@@ -3,7 +3,7 @@ import { haversineKm } from './distanceCalc';
 export async function matchFoundItemToReports(supabase, foundItem) {
   const { data: reports } = await supabase
     .from('loss_reports')
-    .select('*')
+    .select('id,category,status,last_seen_lat,last_seen_lng')
     .eq('category', foundItem.category)
     .eq('status', 'searching');
 
@@ -19,7 +19,7 @@ export async function matchFoundItemToReports(supabase, foundItem) {
 export async function matchLossReportToItems(supabase, lossReport) {
   const { data: items } = await supabase
     .from('found_items')
-    .select('*')
+    .select('id,category,status,found_lat,found_lng')
     .eq('category', lossReport.category)
     .eq('status', 'unclaimed');
 

@@ -24,12 +24,26 @@ export default function ClaimItem() {
     
     setLoading(true);
     setError(null);
+
+    const RL_KEY = 'khoja-claim-attempts';
+    const RL_WINDOW = 15 * 60 * 1000;
+    const MAX_ATTEMPTS = 5;
+    const stored = JSON.parse(localStorage.getItem(RL_KEY) || '{"count":0,"since":0}');
+    if (Date.now() - stored.since < RL_WINDOW && stored.count >= MAX_ATTEMPTS) {
+      setError(`Too many attempts. Please wait ${Math.ceil((stored.since + RL_WINDOW - Date.now()) / 60000)} minutes.`);
+      setLoading(false);
+      return;
+    }
+    const newStored = Date.now() - stored.since > RL_WINDOW
+      ? { count: 1, since: Date.now() }
+      : { ...stored, count: stored.count + 1 };
+    localStorage.setItem(RL_KEY, JSON.stringify(newStored));
     
     try {
       // 1. Find the item by claim code
       const { data: items, error: findError } = await supabase
         .from('found_items')
-        .select('*')
+        .select('id,posted_by,status,claim_code')
         .eq('claim_code', code.trim().toUpperCase());
         
       if (findError) throw findError;

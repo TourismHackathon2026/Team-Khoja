@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useLanguage } from '../../context/LanguageContext';
 import { useAuth } from '../../context/AuthContext';
 import { generateClaimCode } from '../../lib/generateClaimCode';
+import { getVerificationQuestions, hashAnswer, verifyAnswers } from '../../lib/verifyOwnership';
 import Modal from '../ui/Modal';
 import Input from '../ui/Input';
 import Button from '../ui/Button';
@@ -9,36 +10,65 @@ import HandoverPhotoUpload from '../handover/HandoverPhotoUpload';
 import { supabase } from '../../lib/supabase';
 import { ShieldCheck, Camera } from 'lucide-react';
 
-// Step 1 — tourist provides identifying detail → claim code generated + handover row created
-// Step 2 — finder uploads handover photo (optional but encouraged)
-// Step 3 — done
-
 export default function ClaimModal({ isOpen, onClose, item, onSuccess }) {
   const { t } = useLanguage();
   const { user } = useAuth();
 
   const [step, setStep] = useState(1);
-  const [detail, setDetail] = useState('');
+  const [questions, setQuestions] = useState([]);
+  const [answers, setAnswers] = useState([]);
   const [claimCode, setClaimCode] = useState(null);
   const [handoverId, setHandoverId] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [lockedUntil, setLockedUntil] = useState(null);
+
+  useEffect(() => {
+    if (!isOpen || !item?.id) return;
+
+    const loadQuestions = async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const questionList = await getVerificationQuestions(supabase, item.id);
+        setQuestions(questionList);
+        setAnswers(questionList.map(() => ''));
+      } catch (err) {
+        setError(err.message || 'Failed to load verification questions.');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadQuestions();
+  }, [isOpen, item?.id]);
 
   const handleGenerateCode = async (e) => {
     e.preventDefault();
-    if (!detail.trim()) return;
     if (!user) {
       setError('You must be logged in to claim an item.');
       return;
     }
+    if (questions.length === 0 || answers.some(answer => !answer.trim())) return;
 
     setLoading(true);
     setError(null);
 
     try {
-      const newCode = generateClaimCode();
+      const hashedAnswers = await Promise.all(
+        answers.map(async (answer, index) => ({ index, hash: await hashAnswer(answer) }))
+      );
+      const result = await verifyAnswers(supabase, item.id, hashedAnswers);
 
-      // 1. Write the claim code onto the found item
+      if (!result.pass) {
+        if (result.lockedUntil) setLockedUntil(result.lockedUntil);
+        setError(result.lockedUntil
+          ? `Too many incorrect attempts. Try again after ${new Date(result.lockedUntil).toLocaleTimeString()}.`
+          : `Incorrect answers. ${result.attemptsLeft} attempts remaining.`);
+        return;
+      }
+
+      const newCode = generateClaimCode();
       const { error: updateError } = await supabase
         .from('found_items')
         .update({ claim_code: newCode, status: 'matched' })
@@ -46,7 +76,6 @@ export default function ClaimModal({ isOpen, onClose, item, onSuccess }) {
 
       if (updateError) throw updateError;
 
-      // 2. Create the handover audit row immediately
       const { data: handover, error: handoverError } = await supabase
         .from('handovers')
         .insert({
@@ -55,7 +84,7 @@ export default function ClaimModal({ isOpen, onClose, item, onSuccess }) {
           claim_code: newCode,
           claimed_by: user.id,
           handed_over_by: item.posted_by || null,
-          notes: detail.trim(),
+          notes: 'Ownership verified by secret questions.',
         })
         .select()
         .single();
@@ -73,44 +102,50 @@ export default function ClaimModal({ isOpen, onClose, item, onSuccess }) {
     }
   };
 
-  const handlePhotoSuccess = () => {
-    setStep(3);
-  };
+  const handlePhotoSuccess = () => setStep(3);
+  const handleSkipPhoto = () => setStep(3);
 
-  const handleSkipPhoto = () => {
-    setStep(3);
-  };
-
-  // Step 1 — Verify ownership
   if (step === 1) {
     return (
       <Modal isOpen={isOpen} onClose={onClose} title={t('claim.title') || 'Claim This Item'}>
         <form onSubmit={handleGenerateCode} className="space-y-4">
           <p className="text-sm text-muted">
-            To claim this item, describe a unique detail only the true owner would know —
-            a scratch, what's inside, a serial number, etc.
+            Answer the finder&apos;s verification questions to prove this item is yours.
           </p>
-          <Input
-            label="Identifying Detail"
-            multiline
-            rows={3}
-            value={detail}
-            onChange={(e) => setDetail(e.target.value)}
-            placeholder="Describe a unique feature..."
-            required
-          />
+
+          {lockedUntil ? (
+            <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg p-3">
+              Too many incorrect attempts. Try again after {new Date(lockedUntil).toLocaleTimeString()}.
+            </p>
+          ) : !loading && questions.length === 0 ? (
+            <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg p-3">
+              This item cannot be claimed because it has no verification questions.
+            </p>
+          ) : (
+            questions.map((question, index) => (
+              <Input
+                key={question.index}
+                label={question.q}
+                value={answers[index] || ''}
+                onChange={(e) => setAnswers(answers.map((answer, i) => i === index ? e.target.value : answer))}
+                required
+              />
+            ))
+          )}
+
           {error && (
             <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg p-3">
               {error}
             </p>
           )}
+
           <div className="flex justify-end space-x-3 pt-2">
             <Button variant="ghost" onClick={onClose} type="button">Cancel</Button>
             <Button
               variant="primary"
               type="submit"
               isLoading={loading}
-              disabled={!detail.trim()}
+              disabled={loading || lockedUntil || questions.length === 0 || answers.some(answer => !answer.trim())}
             >
               Generate Claim Code
             </Button>
@@ -120,12 +155,10 @@ export default function ClaimModal({ isOpen, onClose, item, onSuccess }) {
     );
   }
 
-  // Step 2 — Show code + collect handover photo
   if (step === 2) {
     return (
       <Modal isOpen={isOpen} onClose={onClose} title="Your Claim Code">
         <div className="space-y-6">
-          {/* Claim code display */}
           <div className="text-center">
             <p className="text-sm text-muted mb-3">
               Show this code to the finder to complete the handover.
@@ -140,7 +173,6 @@ export default function ClaimModal({ isOpen, onClose, item, onSuccess }) {
             </div>
           </div>
 
-          {/* Handover photo */}
           <div className="border-t border-border pt-5">
             <div className="flex items-center gap-2 mb-3">
               <Camera size={18} className="text-primary" />
@@ -151,15 +183,12 @@ export default function ClaimModal({ isOpen, onClose, item, onSuccess }) {
             <p className="text-xs text-muted mb-3">
               A photo of the handover moment creates a verified audit trail for both parties.
             </p>
-            <HandoverPhotoUpload
-              handoverId={handoverId}
-              onUploadSuccess={handlePhotoSuccess}
-            />
+            <HandoverPhotoUpload handoverId={handoverId} onUploadSuccess={handlePhotoSuccess} />
           </div>
 
           <div className="flex justify-end pt-1">
             <Button variant="ghost" size="sm" onClick={handleSkipPhoto}>
-              Skip photo, I'm done
+              Skip photo, I&apos;m done
             </Button>
           </div>
         </div>
@@ -167,7 +196,6 @@ export default function ClaimModal({ isOpen, onClose, item, onSuccess }) {
     );
   }
 
-  // Step 3 — Success
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Handover Complete">
       <div className="text-center space-y-4 py-2">

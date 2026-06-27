@@ -11,7 +11,7 @@ export function useLossReports(options = {}) {
     try {
       let query = supabase
         .from('loss_reports')
-        .select(`*, profiles!reported_by (full_name, phone)`)
+        .select(`*, profiles:reported_by(full_name, phone)`)
         .order('created_at', { ascending: false });
 
       if (options.status) {
