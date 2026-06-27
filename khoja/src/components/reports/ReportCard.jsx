@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom';
 import { MapPin, Clock } from 'lucide-react';
 import { useLanguage } from '../../context/LanguageContext';
-import { formatDistanceToNow } from 'date-fns';
+import { safeFormatDistanceToNow } from '../../lib/dateUtils';
 import CategoryBadge from '../items/CategoryBadge';
 import Badge from '../ui/Badge';
 import Button from '../ui/Button';
@@ -35,7 +35,7 @@ export default function ReportCard({ report }) {
         </div>
         <div className="flex items-center">
           <Clock size={16} className="mr-1.5 shrink-0" />
-          <span>Reported {formatDistanceToNow(new Date(report.created_at), { addSuffix: true })}</span>
+          <span>Reported {safeFormatDistanceToNow(report.created_at)}</span>
         </div>
       </div>
       
