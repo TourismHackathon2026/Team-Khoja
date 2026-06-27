@@ -1,3 +1,4 @@
+/* eslint-disable no-unused-vars */
 import { useEffect, useState } from 'react';
 import { useLanguage } from '../context/LanguageContext';
 import { useAuth } from '../context/AuthContext';
@@ -18,7 +19,7 @@ export default function SpotterNetwork() {
     const fetchSpotters = async () => {
       const { data } = await supabase
         .from('profiles')
-        .select('full_name, location_zone')
+        .select('full_name, location_name')  // location_zone → location_name
         .eq('role', 'spotter')
         .limit(10);
       if (data) setSpotters(data);
@@ -35,13 +36,12 @@ export default function SpotterNetwork() {
     try {
       const { error } = await supabase
         .from('profiles')
-        .upsert({
-          id: user.id,
-          email: user.email,
-          full_name: profile?.full_name || user.email,
+        .update({
           role: 'spotter',
-          location_zone: profile?.location_zone || 'Thamel, Kathmandu'
-        });
+          location_name: profile?.location_name || 'Thamel, Kathmandu',
+          is_spotter: true,
+        })
+        .eq('id', user.id);
         
       if (error) throw error;
       setIsSpotter(true);
@@ -124,7 +124,7 @@ export default function SpotterNetwork() {
                       </div>
                       <div>
                         <p className="font-semibold text-text text-sm">{spotter.full_name}</p>
-                        <p className="text-xs text-muted flex items-center"><MapPin size={10} className="mr-1"/> {spotter.location_zone || 'Kathmandu'}</p>
+                        <p className="text-xs text-muted flex items-center"><MapPin size={10} className="mr-1"/> {spotter.location_name || 'Kathmandu'}</p>
                       </div>
                     </div>
                     <Badge variant="green" className="text-[10px]">Verified</Badge>

@@ -1,3 +1,4 @@
+/* eslint-disable no-unused-vars */
 import { useState, useCallback, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDropzone } from 'react-dropzone';
@@ -28,7 +29,7 @@ const categories = [
 
 export default function PostFound() {
   const { t } = useLanguage();
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const { isOnline } = useOnlineStatus();
   const navigate = useNavigate();
 
@@ -71,7 +72,12 @@ export default function PostFound() {
   const handleNext = () => setStep(s => s + 1);
   const handlePrev = () => setStep(s => s - 1);
 
+
   const handleSubmit = async () => {
+    if (!user) {
+      navigate('/auth', { state: { from: { pathname: '/post-found' } } });
+    return
+    }
     setLoading(true);
     setError(null);
 

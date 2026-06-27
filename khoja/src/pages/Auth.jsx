@@ -1,3 +1,4 @@
+/* eslint-disable no-unused-vars */
 import { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
@@ -47,6 +48,12 @@ export default function Auth() {
         const { error: signUpError, data } = await supabase.auth.signUp({
           email,
           password,
+          options: {
+            data: {
+              full_name: fullName,
+              phone: phone,
+            }
+          }
         });
         if (signUpError) throw signUpError;
         

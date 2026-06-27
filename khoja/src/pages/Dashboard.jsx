@@ -1,3 +1,4 @@
+/* eslint-disable no-unused-vars */
 import { useEffect, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { supabase } from '../lib/supabase';
@@ -37,8 +38,8 @@ export default function Dashboard() {
           supabase.from('loss_reports').select('*').eq('reported_by', user.id).order('created_at', { ascending: false }),
           supabase.from('handovers').select(`
             *,
-            claimed_by_profile:profiles!claimed_by(full_name),
-            handed_over_by_profile:profiles!handed_over_by(full_name)
+            claimed_by_profile:profiles!handovers_claimed_by_fkey(full_name),
+            handed_over_by_profile:profiles!handovers_handed_over_by_fkey(full_name)
           `).or(`claimed_by.eq.${user.id},handed_over_by.eq.${user.id}`).order('created_at', { ascending: false })
         ]);
 

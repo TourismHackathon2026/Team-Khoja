@@ -10,14 +10,21 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(true)
 
     async function fetchProfile(userId) {
-    const { data } = await supabase
+  try {
+    const { data, error } = await supabase
       .from('profiles')
       .select('*')
       .eq('id', userId)
       .single()
-    setProfile(data)
-    setLoading(false)
+    // PGRST116 = "no rows returned" — profile doesn't exist yet, not a real error
+    if (error && error.code !== 'PGRST116') {
+      console.error('fetchProfile error:', error)
+    }
+    setProfile(data ?? null)
+  } finally {
+    setLoading(false) // always unblock the app
   }
+}
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
