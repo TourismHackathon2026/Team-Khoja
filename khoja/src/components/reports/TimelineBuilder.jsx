@@ -1,5 +1,3 @@
-/* eslint-disable react-hooks/purity */
-/* eslint-disable no-unused-vars */
 import { useState } from 'react';
 import { MapContainer, TileLayer, Marker, useMapEvents } from 'react-leaflet';
 import L from 'leaflet';
@@ -34,17 +32,6 @@ export default function TimelineBuilder({ waypoints, onChange, error }) {
     };
     onChange([...waypoints, newPoint]);
     setActivePoint(newPoint.id);
-    reverseGeocode(newPoint);
-  };
-
-  const reverseGeocode = async (point) => {
-    try {
-      const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${point.lat}&lon=${point.lng}`);
-      const data = await res.json();
-      updateWaypoint(point.id, 'location_name', data.display_name || 'Selected Location');
-    } catch (err) {
-      console.error('Geocoding failed');
-    }
   };
 
   const updateWaypoint = (id, field, value) => {

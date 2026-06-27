@@ -32,19 +32,3 @@ export function useLossReportsRealtime(onNewReport) {
     };
   }, [onNewReport]);
 }
-
-export function useTableChanges(table, event, callback) {
-  useEffect(() => {
-    const channel = supabase
-      .channel(`${table}_${event}_changes`)
-      .on('postgres_changes',
-        { event: event, schema: 'public', table: table },
-        (payload) => callback(payload)
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [table, event, callback]);
-}
