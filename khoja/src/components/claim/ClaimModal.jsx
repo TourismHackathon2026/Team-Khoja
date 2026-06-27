@@ -8,6 +8,7 @@ import Input from '../ui/Input';
 import Button from '../ui/Button';
 import HandoverPhotoUpload from '../handover/HandoverPhotoUpload';
 import { supabase } from '../../lib/supabase';
+import { notifyClaimCodeIssued, notifyHandoverComplete } from '../../lib/emailNotifications';
 import { ShieldCheck, Camera } from 'lucide-react';
 
 export default function ClaimModal({ isOpen, onClose, item, onSuccess }) {
@@ -94,6 +95,21 @@ export default function ClaimModal({ isOpen, onClose, item, onSuccess }) {
       setClaimCode(newCode);
       setHandoverId(handover.id);
       setStep(2);
+
+      // Email the claimant their claim code
+      const { data: { user: currentUser } } = await supabase.auth.getUser();
+      const { data: claimantProfile } = await supabase
+        .from('profiles')
+        .select('email, full_name')
+        .eq('id', user.id)
+        .single();
+      await notifyClaimCodeIssued(supabase, {
+        userEmail: claimantProfile?.email || currentUser?.email,
+        userName: claimantProfile?.full_name,
+        claimCode: newCode,
+        itemTitle: item.title || 'the item',
+      });
+
       if (onSuccess) onSuccess(newCode);
     } catch (err) {
       setError(err.message || 'Failed to generate claim code. Please try again.');
@@ -102,8 +118,32 @@ export default function ClaimModal({ isOpen, onClose, item, onSuccess }) {
     }
   };
 
-  const handlePhotoSuccess = () => setStep(3);
-  const handleSkipPhoto = () => setStep(3);
+  const handlePhotoSuccess = async () => {
+    await _sendHandoverCompleteEmails(true);
+    setStep(3);
+  };
+  const handleSkipPhoto = async () => {
+    await _sendHandoverCompleteEmails(false);
+    setStep(3);
+  };
+
+  const _sendHandoverCompleteEmails = async (hasPhoto) => {
+    try {
+      const { data: claimantProfile } = await supabase
+        .from('profiles').select('email, full_name').eq('id', user.id).single();
+      const finderProfile = item?.profiles || null;
+      await notifyHandoverComplete(supabase, {
+        handover: { id: handoverId, handover_photo_url: hasPhoto ? 'yes' : null },
+        foundItem: item,
+        claimantEmail: claimantProfile?.email,
+        claimantName: claimantProfile?.full_name,
+        finderEmail: finderProfile?.email,
+        finderName: finderProfile?.full_name,
+      });
+    } catch (e) {
+      console.warn('[ClaimModal] handover email failed:', e.message);
+    }
+  };
 
   if (step === 1) {
     return (

@@ -10,10 +10,12 @@ import { saveDraft } from '../lib/offlineQueue';
 import { matchFoundItemToReports } from '../lib/matchItems';
 import { notifyNearbySpotters } from '../lib/notifySpotters';
 import { hashAnswer } from '../lib/verifyOwnership';
+import { runOwnerVerificationChecks, getChecklistStatus } from '../lib/ownerVerificationChecks';
+import { notifyListingApproved, notifyListingRejected, notifyMatchFound } from '../lib/emailNotifications';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
 import LocationPicker from '../components/map/LocationPicker';
-import { Upload, X, Map as MapIcon, Camera, CreditCard, Smartphone, Package, Briefcase, Watch, Key, HelpCircle } from 'lucide-react';
+import { Upload, X, Map as MapIcon, Camera, CreditCard, Smartphone, Package, Briefcase, Watch, Key, HelpCircle, CheckCircle2, XCircle, AlertTriangle, ShieldCheck } from 'lucide-react';
 
 const categories = [
   { id: 'passport', icon: MapIcon, label: 'Passport' },
@@ -36,6 +38,7 @@ export default function PostFound() {
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [verificationWarning, setVerificationWarning] = useState(null);
 
   const [formData, setFormData] = useState(() => {
     const saved = localStorage.getItem('khoja-post-found-draft');
@@ -47,7 +50,7 @@ export default function PostFound() {
       phone: '',
     };
   });
-  
+
   const [photoFile, setPhotoFile] = useState(null);
   const [photoPreview, setPhotoPreview] = useState(null);
   const [verificationQuestions, setVerificationQuestions] = useState([
@@ -59,6 +62,19 @@ export default function PostFound() {
   useEffect(() => {
     localStorage.setItem('khoja-post-found-draft', JSON.stringify(formData));
   }, [formData]);
+
+  // Live checklist status on step 5
+  const checklistItems = getChecklistStatus(
+    {
+      title: formData.title,
+      description: formData.description,
+      category: formData.category,
+      found_lat: formData.location?.lat,
+      found_lng: formData.location?.lng,
+    },
+    verificationQuestions
+  );
+  const allChecksPassed = checklistItems.every(c => c.pass);
 
   const onDrop = useCallback((acceptedFiles) => {
     const file = acceptedFiles[0];
@@ -74,39 +90,73 @@ export default function PostFound() {
     maxFiles: 1,
   });
 
-  const handleNext = () => setStep(s => s + 1);
-  const handlePrev = () => setStep(s => s - 1);
-
+  const handleNext = () => { setError(null); setStep(s => s + 1); };
+  const handlePrev = () => { setError(null); setStep(s => s - 1); };
 
   const handleSubmit = async () => {
     if (!user) {
       navigate('/auth', { state: { from: { pathname: '/post-found' } } });
-    return
+      return;
     }
+
     setLoading(true);
     setError(null);
+    setVerificationWarning(null);
 
     try {
+      // ── Build partial item data for checks ──────────────────────────────
+      const partialItemData = {
+        title: formData.title,
+        description: formData.description,
+        category: formData.category,
+        found_lat: formData.location?.lat,
+        found_lng: formData.location?.lng,
+      };
+
+      // ── Run pre-listing owner verification checks ───────────────────────
+      const checkResult = await runOwnerVerificationChecks(
+        supabase,
+        user,
+        partialItemData,
+        verificationQuestions
+      );
+
+      if (!checkResult.pass) {
+        // Non-fatal path: notify user + optionally email them the rejection reason
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('email, full_name')
+          .eq('id', user.id)
+          .single();
+
+        await notifyListingRejected(supabase, {
+          userEmail: profile?.email || user.email,
+          userName: profile?.full_name,
+          itemTitle: formData.title || 'your item',
+          reason: checkResult.reason,
+        });
+
+        setError(checkResult.reason);
+        setLoading(false);
+        return;
+      }
+
+      // ── Photo upload ────────────────────────────────────────────────────
       let photoUrl = null;
-      
-      // Upload photo if online and exists
       if (isOnline && photoFile) {
         const ext = photoFile.name.split('.').pop();
         const path = `${Date.now()}_${Math.random().toString(36).substring(7)}.${ext}`;
-        
         const { error: uploadError } = await supabase.storage
           .from('found-items')
           .upload(path, photoFile);
-          
         if (uploadError) throw uploadError;
-        
         const { data: { publicUrl } } = supabase.storage
           .from('found-items')
           .getPublicUrl(path);
-          
         photoUrl = publicUrl;
       }
 
+      // ── Hash verification answers ───────────────────────────────────────
       const verification_questions = await Promise.all(
         verificationQuestions
           .filter(({ q, a }) => q.trim() && a.trim())
@@ -114,18 +164,20 @@ export default function PostFound() {
       );
 
       const itemData = {
-        title: formData.title,
-        description: formData.description,
+        title: formData.title.trim(),
+        description: formData.description.trim(),
         category: formData.category,
         photo_url: photoUrl,
         found_lat: formData.location.lat,
         found_lng: formData.location.lng,
         location_name: formData.location.address,
-        posted_by: user?.id || null, 
+        posted_by: user?.id || null,
         claim_code: null,
         verification_questions,
+        status: 'unclaimed',
       };
 
+      // ── Offline path ────────────────────────────────────────────────────
       if (!isOnline) {
         await saveDraft('found_item', itemData);
         localStorage.removeItem('khoja-post-found-draft');
@@ -134,6 +186,7 @@ export default function PostFound() {
         return;
       }
 
+      // ── Insert to DB ────────────────────────────────────────────────────
       const { data: insertedItem, error: insertError } = await supabase
         .from('found_items')
         .insert(itemData)
@@ -142,10 +195,41 @@ export default function PostFound() {
 
       if (insertError) throw insertError;
 
-      const matches = await matchFoundItemToReports(supabase, { ...itemData, id: insertedItem.id });
+      // ── Send listing-approved email ─────────────────────────────────────
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('email, full_name')
+        .eq('id', user.id)
+        .single();
+
+      await notifyListingApproved(supabase, {
+        userEmail: profile?.email || user.email,
+        userName: profile?.full_name,
+        itemTitle: itemData.title,
+        foundItemId: insertedItem.id,
+      });
+
+      // ── Match + notify ──────────────────────────────────────────────────
+      const fullItem = { ...itemData, id: insertedItem.id };
+      const matches = await matchFoundItemToReports(supabase, fullItem);
+
       if (matches && matches.length > 0) {
         for (const match of matches) {
-           await notifyNearbySpotters(supabase, match);
+          await notifyNearbySpotters(supabase, match);
+
+          // Fetch full loss report for email (including reporter profile)
+          const { data: lossReport } = await supabase
+            .from('loss_reports')
+            .select('*, profiles:reported_by(full_name, email)')
+            .eq('id', match.id)
+            .single();
+
+          if (lossReport) {
+            await notifyMatchFound(supabase, {
+              foundItem: { ...fullItem, profiles: profile },
+              lossReport,
+            });
+          }
         }
       }
 
@@ -180,8 +264,14 @@ export default function PostFound() {
       </div>
 
       <div className="bg-surface rounded-xl border border-border p-6 shadow-sm">
-        {error && <div className="mb-6 p-4 bg-red-50 text-red-700 rounded-lg">{error}</div>}
+        {error && (
+          <div className="mb-6 p-4 bg-red-50 text-red-700 rounded-lg flex gap-3 items-start">
+            <AlertTriangle size={18} className="mt-0.5 shrink-0" />
+            <span>{error}</span>
+          </div>
+        )}
 
+        {/* ── Step 1: Category ─────────────────────────────────────────── */}
         {step === 1 && (
           <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
             <h2 className="text-xl font-medium text-text mb-4">What did you find?</h2>
@@ -212,10 +302,10 @@ export default function PostFound() {
           </div>
         )}
 
+        {/* ── Step 2: Photo ─────────────────────────────────────────────── */}
         {step === 2 && (
           <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
             <h2 className="text-xl font-medium text-text mb-4">Add a photo</h2>
-            
             {photoPreview ? (
               <div className="relative rounded-lg overflow-hidden border border-border aspect-video">
                 <img src={photoPreview} alt="Preview" className="w-full h-full object-cover" />
@@ -227,8 +317,8 @@ export default function PostFound() {
                 </button>
               </div>
             ) : (
-              <div 
-                {...getRootProps()} 
+              <div
+                {...getRootProps()}
                 className={`border-2 border-dashed rounded-xl p-12 text-center cursor-pointer transition-colors ${
                   isDragActive ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/50'
                 }`}
@@ -241,7 +331,6 @@ export default function PostFound() {
                 <p className="text-sm text-muted mt-2">A clear photo helps the owner identify it</p>
               </div>
             )}
-            
             <div className="flex justify-between pt-4">
               <Button variant="secondary" onClick={handlePrev}>Back</Button>
               <Button variant="primary" onClick={handleNext}>Next</Button>
@@ -249,6 +338,7 @@ export default function PostFound() {
           </div>
         )}
 
+        {/* ── Step 3: Details & Location ───────────────────────────────── */}
         {step === 3 && (
           <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
             <h2 className="text-xl font-medium text-text mb-4">Details & Location</h2>
@@ -263,11 +353,10 @@ export default function PostFound() {
               label={t('form.description')}
               multiline
               rows={3}
-              placeholder="Any identifying features..."
+              placeholder="Any identifying features, brand, colour, contents…"
               value={formData.description}
               onChange={(e) => setFormData({ ...formData, description: e.target.value })}
             />
-            
             <div className="pt-2">
               <label className="text-sm font-medium text-text mb-1 block">{t('form.location')}</label>
               <LocationPicker
@@ -275,11 +364,10 @@ export default function PostFound() {
                 onChange={(loc) => setFormData({ ...formData, location: loc })}
               />
             </div>
-
             <div className="flex justify-between pt-4">
               <Button variant="secondary" onClick={handlePrev}>Back</Button>
-              <Button 
-                variant="primary" 
+              <Button
+                variant="primary"
                 onClick={handleNext}
                 disabled={!formData.title || !formData.location?.lat}
               >
@@ -289,6 +377,7 @@ export default function PostFound() {
           </div>
         )}
 
+        {/* ── Step 4: Contact ───────────────────────────────────────────── */}
         {step === 4 && (
           <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
             <h2 className="text-xl font-medium text-text mb-4">Contact Info</h2>
@@ -302,7 +391,6 @@ export default function PostFound() {
               onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
               required
             />
-
             <div className="flex justify-between pt-4">
               <Button variant="secondary" onClick={handlePrev} disabled={loading}>Back</Button>
               <Button variant="primary" onClick={handleNext} disabled={!formData.phone}>Next</Button>
@@ -310,38 +398,80 @@ export default function PostFound() {
           </div>
         )}
 
+        {/* ── Step 5: Verification Questions + Pre-submit checklist ─────── */}
         {step === 5 && (
           <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
-            <h2 className="text-xl font-medium text-text mb-4">Set Verification Questions</h2>
-            <p className="text-sm text-muted">
-              Ask questions only the true owner can answer. Two are required; the third is optional.
-            </p>
+            <div>
+              <h2 className="text-xl font-medium text-text mb-1">Set Verification Questions</h2>
+              <p className="text-sm text-muted">
+                Ask questions only the true owner can answer. Two are required; the third is optional.
+              </p>
+            </div>
 
             {verificationQuestions.map((question, index) => (
               <div key={index} className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4 bg-bg rounded-lg border border-border">
                 <Input
                   label={`Question ${index + 1}${index === 2 ? ' (Optional)' : ''}`}
                   value={question.q}
-                  onChange={(e) => setVerificationQuestions(verificationQuestions.map((item, i) => i === index ? { ...item, q: e.target.value } : item))}
-                  placeholder="What color is the zipper?"
+                  onChange={(e) =>
+                    setVerificationQuestions(verificationQuestions.map((item, i) =>
+                      i === index ? { ...item, q: e.target.value } : item
+                    ))
+                  }
+                  placeholder={
+                    index === 0 ? 'What colour is the main zipper?' :
+                    index === 1 ? 'What brand is the item?' :
+                    'Any other identifying detail?'
+                  }
                   required={index < 2}
                 />
                 <Input
                   label="Answer"
                   value={question.a}
-                  onChange={(e) => setVerificationQuestions(verificationQuestions.map((item, i) => i === index ? { ...item, a: e.target.value } : item))}
-                  placeholder="Blue"
+                  onChange={(e) =>
+                    setVerificationQuestions(verificationQuestions.map((item, i) =>
+                      i === index ? { ...item, a: e.target.value } : item
+                    ))
+                  }
+                  placeholder="e.g. Red"
                   required={index < 2}
                 />
               </div>
             ))}
 
-            <div className="flex justify-between pt-4">
+            {/* Pre-submit checklist */}
+            <div className="border border-border rounded-xl p-4 bg-bg">
+              <div className="flex items-center gap-2 mb-3">
+                <ShieldCheck size={16} className="text-primary" />
+                <span className="text-sm font-semibold text-text">Listing quality checks</span>
+              </div>
+              <ul className="space-y-2">
+                {checklistItems.map((item) => (
+                  <li key={item.label} className="flex items-center gap-2 text-sm">
+                    {item.pass
+                      ? <CheckCircle2 size={15} className="text-green-500 shrink-0" />
+                      : <XCircle size={15} className="text-red-400 shrink-0" />}
+                    <span className={item.pass ? 'text-text' : 'text-red-600'}>{item.label}</span>
+                  </li>
+                ))}
+              </ul>
+              {!allChecksPassed && (
+                <p className="mt-3 text-xs text-muted">
+                  Complete the items above before submitting — they protect the owner and prevent your listing from being flagged.
+                </p>
+              )}
+            </div>
+
+            <div className="flex justify-between pt-2">
               <Button variant="secondary" onClick={handlePrev} disabled={loading}>Back</Button>
               <Button
                 variant="primary"
                 onClick={handleSubmit}
-                disabled={verificationQuestions.slice(0, 2).some(({ q, a }) => !q.trim() || !a.trim())}
+                disabled={
+                  loading ||
+                  verificationQuestions.slice(0, 2).some(({ q, a }) => !q.trim() || !a.trim()) ||
+                  !allChecksPassed
+                }
                 isLoading={loading}
               >
                 {t('form.submit')}
