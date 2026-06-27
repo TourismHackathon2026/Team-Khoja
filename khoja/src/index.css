@@ -1,3 +1,36 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer base {
+  :root {
+    --color-primary: #1B4332;
+    --color-primary-light: #2D6A4F;
+    --color-accent: #E76F51;
+    --color-accent-light: #F4A261;
+    --color-found: #2D6A4F;
+    --color-lost: #E63946;
+    --color-matched: #F4A261;
+    --color-claimed: #52B788;
+    --color-bg: #FAFAF8;
+    --color-surface: #FFFFFF;
+    --color-muted: #6B7280;
+    --color-border: #E5E7EB;
+    --color-text: #111827;
+    --color-offline: #B45309;
+  }
+  
+  body {
+    @apply bg-bg text-text font-sans;
+  }
+  
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-heading;
+  }
+}
+
+.leaflet-container {
+  width: 100%;
+  height: 100%;
+  z-index: 10;
+}

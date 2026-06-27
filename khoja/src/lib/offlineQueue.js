@@ -1,3 +1,4 @@
+/* eslint-disable no-unused-vars */
 import { openDB } from 'idb';
 
 const DB_NAME = 'khoja-offline';
@@ -26,9 +27,11 @@ export async function deleteDraft(id) {
   return db.delete(STORE, id);
 }
 
-export async function syncDrafts(supabase) {
+export async function syncDrafts(supabase, onProgress) {
   const drafts = await getDrafts();
-  const results = [];
+  const results = { succeeded: 0, failed: 0, total: drafts.length, done: 0 };
+
+  if (onProgress) onProgress(results);
 
   for (const draft of drafts) {
     try {
@@ -36,14 +39,17 @@ export async function syncDrafts(supabase) {
       const { error } = await supabase.from(table).insert(draft.data);
       if (!error) {
         await deleteDraft(draft.id);
-        results.push({ id: draft.id, status: 'synced' });
+        results.succeeded++;
       } else {
-        results.push({ id: draft.id, status: 'failed', error });
+        results.failed++;
       }
     } catch (err) {
-      results.push({ id: draft.id, status: 'failed', error: err });
+      results.failed++;
     }
+    
+    results.done++;
+    if (onProgress) onProgress(results);
   }
 
-  return results;
+  return { succeeded: results.succeeded, failed: results.failed };
 }

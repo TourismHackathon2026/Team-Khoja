@@ -4,12 +4,23 @@ import { supabase } from '../lib/supabase';
 
 export function useOnlineStatus() {
   const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncResult, setSyncResult] = useState(null);
+
+  const triggerSync = async () => {
+    if (!navigator.onLine) return;
+    setIsSyncing(true);
+    setSyncResult(null);
+    const result = await syncDrafts(supabase);
+    setSyncResult(result);
+    setIsSyncing(false);
+  };
 
   useEffect(() => {
     const handleOnline = async () => {
       setIsOnline(true);
       // Auto-sync when connection is restored
-      await syncDrafts(supabase);
+      await triggerSync();
     };
     const handleOffline = () => setIsOnline(false);
 
@@ -21,5 +32,5 @@ export function useOnlineStatus() {
     };
   }, []);
 
-  return isOnline;
+  return { isOnline, isSyncing, syncResult, triggerSync };
 }
