@@ -116,3 +116,7 @@ export const TRANSLATIONS = {
     'status.recovered': 'फिर्ता भयो',
   }
 };
+
+export function createTranslator(lang) {
+  return (key) => TRANSLATIONS[lang]?.[key] ?? TRANSLATIONS['en'][key] ?? key;
+}
