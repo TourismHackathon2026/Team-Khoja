@@ -24,7 +24,7 @@ export default function ItemDetail() {
       try {
         const { data, error: fetchError } = await supabase
           .from('found_items')
-          .select('id,title,description,category,photo_url,found_lat,found_lng,location_name,posted_by,claim_code,status,matched_report_id,created_at,profiles:posted_by(full_name, phone)')
+          .select('id,title,description,category,photo_url,found_lat,found_lng,location_name,posted_by,claim_code,status,matched_report_id,created_at,verification_questions,claim_attempts,locked_until,profiles:posted_by(full_name, phone)')
           .eq('id', id)
           .single();
           

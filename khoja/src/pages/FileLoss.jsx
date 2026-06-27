@@ -1,3 +1,4 @@
+/* eslint-disable no-unused-vars */
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useLanguage } from '../context/LanguageContext';
@@ -26,7 +27,7 @@ const categories = [
 
 export default function FileLoss() {
   const { t } = useLanguage();
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const { isOnline } = useOnlineStatus();
   const navigate = useNavigate();
 
@@ -53,6 +54,10 @@ export default function FileLoss() {
   const handlePrev = () => setStep(s => s - 1);
 
   const handleSubmit = async () => {
+    if (!user) {
+      navigate('/auth', { state: { from: { pathname: '/file-loss' } } });
+      return;
+    }
     setLoading(true);
     setError(null);
 
